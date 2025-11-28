@@ -1,0 +1,12 @@
+[Desktop Entry]
+Version=1.0
+Type=Application
+Name=Linear Notifier
+Comment=Desktop notifier for Linear API
+Exec=linear-notifier
+Icon=com.example.LinearNotifier
+Terminal=false
+Categories=Utility;Network;
+StartupNotify=false
+Keywords=linear;notifier;api;desktop;
+

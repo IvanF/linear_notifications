@@ -1,0 +1,5 @@
+include README.md
+recursive-include linear_notifier/data *.ui
+recursive-include linear_notifier/data *.desktop
+recursive-include linear_notifier/data/icons *
+

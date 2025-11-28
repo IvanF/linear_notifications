@@ -1,0 +1,36 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<interface>
+  <requires lib="gtk" version="4.0"/>
+  <object class="GtkBox" id="settings_window">
+    <property name="orientation">vertical</property>
+    <property name="spacing">10</property>
+    <property name="margin-start">20</property>
+    <property name="margin-end">20</property>
+    <property name="margin-top">20</property>
+    <property name="margin-bottom">20</property>
+    <child>
+      <object class="GtkLabel" id="token_label">
+        <property name="label">Linear API Token:</property>
+        <property name="halign">start</property>
+      </object>
+    </child>
+    <child>
+      <object class="GtkEntry" id="token_entry">
+        <property name="placeholder-text">Введите ваш Linear API токен</property>
+        <property name="visibility">False</property>
+      </object>
+    </child>
+    <child>
+      <object class="GtkLabel" id="status_label">
+        <property name="label"></property>
+        <property name="halign">start</property>
+      </object>
+    </child>
+    <child>
+      <object class="GtkButton" id="save_button">
+        <property name="label">Сохранить токен</property>
+      </object>
+    </child>
+  </object>
+</interface>
+

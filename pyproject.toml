@@ -1,0 +1,45 @@
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "linear-notifier"
+version = "0.1.0"
+description = "Desktop notifier for Linear API with GTK 4"
+readme = "README.md"
+requires-python = ">=3.10"
+license = {text = "MIT"}
+authors = [
+    {name = "Linear Notifier", email = "example@example.com"}
+]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: End Users/Desktop",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+]
+
+dependencies = [
+    "keyring>=24.0.0",
+    "secretstorage>=3.3.0",
+    "requests>=2.31.0",
+    "pystray>=0.19.0",
+    "Pillow>=10.0.0",
+]
+
+# Примечание: PyGObject (python3-gi) должен быть установлен системно через apt
+# перед установкой этого пакета. См. README.md для инструкций.
+
+[project.scripts]
+linear-notifier = "linear_notifier.main:main"
+linear-notifier-install-desktop = "linear_notifier.install_desktop:install_desktop_and_icons"
+
+[tool.setuptools]
+packages = ["linear_notifier"]
+
+[tool.setuptools.package-data]
+linear_notifier = ["data/ui/*.ui", "data/*.desktop", "data/icons/**/*"]
+

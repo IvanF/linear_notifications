@@ -1,0 +1,39 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg width="512" height="512" viewBox="0 0 512 512" xmlns="http://www.w3.org/2000/svg">
+  <!-- Фон - круглый с градиентом -->
+  <defs>
+    <linearGradient id="bgGradient" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" style="stop-color:#f5f5f5;stop-opacity:1" />
+      <stop offset="100%" style="stop-color:#e0e0e0;stop-opacity:1" />
+    </linearGradient>
+    <linearGradient id="arrowGradient" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" style="stop-color:#5E6AD2;stop-opacity:1" />
+      <stop offset="100%" style="stop-color:#4A56C7;stop-opacity:1" />
+    </linearGradient>
+  </defs>
+  
+  <!-- Внешний круг -->
+  <circle cx="256" cy="256" r="240" fill="url(#bgGradient)" stroke="#333" stroke-width="4"/>
+  
+  <!-- Синяя стрелка вверх -->
+  <path d="M 256 120 L 320 200 L 280 200 L 280 360 L 232 360 L 232 200 L 192 200 Z" 
+        fill="url(#arrowGradient)"/>
+  
+  <!-- Белая буква L со стрелкой -->
+  <g transform="translate(256, 280)">
+    <!-- Буква L -->
+    <path d="M -40 0 L -40 -60 L 20 -60 L 20 -20 L -10 -20 L -10 0 Z" fill="white"/>
+    <!-- Маленькая стрелка -->
+    <path d="M 25 -65 L 45 -65 L 35 -75 Z" fill="white"/>
+    <line x1="25" y1="-65" x2="35" y2="-75" stroke="white" stroke-width="3" stroke-linecap="round"/>
+  </g>
+  
+  <!-- Маленькая иконка в левом верхнем углу -->
+  <rect x="80" y="80" width="60" height="60" rx="8" fill="#333"/>
+  <g transform="translate(110, 110)">
+    <path d="M -15 0 L -15 -20 L 5 -20 L 5 -5 L -5 -5 L -5 0 Z" fill="white"/>
+    <path d="M 8 -25 L 15 -25 L 11 -30 Z" fill="white"/>
+    <line x1="8" y1="-25" x2="11" y2="-30" stroke="white" stroke-width="2" stroke-linecap="round"/>
+  </g>
+</svg>
+
