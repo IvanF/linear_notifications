@@ -39,14 +39,6 @@ class MainWindow(Gtk.Window):
         # Вкладка 1: Уведомления
         notifications_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=10, margin_start=10, margin_end=10, margin_top=10, margin_bottom=10)
         
-        # Кнопка обновления
-        header_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=10)
-        notifications_box.append(header_box)
-        
-        self.refresh_button = Gtk.Button(label="Обновить")
-        self.refresh_button.connect("clicked", self.on_refresh_clicked)
-        header_box.append(self.refresh_button)
-        
         # ScrolledWindow для списка уведомлений
         scrolled = Gtk.ScrolledWindow()
         scrolled.set_vexpand(True)
@@ -83,6 +75,9 @@ class MainWindow(Gtk.Window):
         
         # Подключаем сигнал переключения вкладок для автоматического обновления лога
         notebook.connect("switch-page", self.on_notebook_switch_page)
+        
+        # Запускаем автоматическое обновление уведомлений
+        self._start_auto_refresh()
     
     def _load_workspace_url_key(self):
         """Загрузить workspace urlKey асинхронно."""
@@ -101,9 +96,26 @@ class MainWindow(Gtk.Window):
         thread = threading.Thread(target=load_in_background, daemon=True)
         thread.start()
     
-    def on_refresh_clicked(self, button):
-        """Обработчик нажатия кнопки обновления."""
+    def _start_auto_refresh(self):
+        """Запустить автоматическое обновление уведомлений."""
+        from gi.repository import GLib
+        
+        # Обновляем сразу при открытии окна
         self.refresh_notifications()
+        
+        # Устанавливаем таймер для периодического обновления (каждую минуту)
+        # Интервал 60 секунд соответствует ограничениям Linear API
+        GLib.timeout_add_seconds(60, self._auto_refresh_callback)
+    
+    def _auto_refresh_callback(self):
+        """Callback для автоматического обновления."""
+        # Проверяем, что окно еще открыто
+        if self.is_visible():
+            self.refresh_notifications()
+            # Возвращаем True, чтобы таймер продолжал работать
+            return True
+        # Если окно закрыто, останавливаем таймер
+        return False
     
     def refresh_notifications(self):
         """Обновить список уведомлений."""

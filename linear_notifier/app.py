@@ -298,6 +298,11 @@ class LinearNotifierApp(Gtk.Application):
                     current_ids = {n.get('id') for n in unread if n.get('id')}
                     new_ids = current_ids - self.last_notification_ids
                     
+                    # Если есть новые уведомления, обновляем главное окно (если оно открыто)
+                    if new_ids and self.main_window:
+                        # Обновляем список уведомлений в главном окне через главный поток GTK
+                        Gtk.idle_add(self._refresh_main_window_notifications)
+                    
                     for notification in unread:
                         if notification.get('id') in new_ids:
                             self._show_desktop_notification(notification)
@@ -380,6 +385,17 @@ class LinearNotifierApp(Gtk.Application):
             print("Открываем главное окно при закрытии уведомления", file=sys.stderr)
             # Используем idle_add для вызова из главного потока GTK
             Gtk.idle_add(self._open_main_window)
+    
+    def _refresh_main_window_notifications(self):
+        """Обновить список уведомлений в главном окне (вызывается из главного потока GTK)."""
+        try:
+            if self.main_window and self.main_window.is_visible():
+                self.main_window.refresh_notifications()
+        except Exception as e:
+            import traceback
+            print(f"Ошибка при обновлении списка уведомлений: {e}", file=sys.stderr)
+            print(f"Детали: {traceback.format_exc()}", file=sys.stderr)
+        return False  # Удаляем из idle queue
     
     def _open_main_window(self):
         """Открыть главное окно (вызывается из главного потока GTK)."""

@@ -9,17 +9,6 @@
     <property name="margin-top">10</property>
     <property name="margin-bottom">10</property>
     <child>
-      <object class="GtkBox" id="header_box">
-        <property name="orientation">horizontal</property>
-        <property name="spacing">10</property>
-        <child>
-          <object class="GtkButton" id="refresh_button">
-            <property name="label">Обновить</property>
-          </object>
-        </child>
-      </object>
-    </child>
-    <child>
       <object class="GtkScrolledWindow" id="scrolled_window">
         <property name="vexpand">True</property>
         <child>
