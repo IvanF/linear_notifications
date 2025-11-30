@@ -160,7 +160,7 @@ pip uninstall linear-notifier
 
 ## Получение Linear API токена
 
-1. Откройте Linear Settings → API
+1. Откройте Linear Settings → Security & access
 2. Создайте Personal API Key
 3. Скопируйте токен и вставьте в окно настроек приложения
 
