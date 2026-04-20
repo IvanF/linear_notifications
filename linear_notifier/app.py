@@ -305,7 +305,9 @@ class LinearNotifierApp(Gtk.Application):
                     
                     for notification in unread:
                         if notification.get('id') in new_ids:
-                            self._show_desktop_notification(notification)
+                            # libnotify/GTK не потокобезопасны: show() из polling-потока
+                            # в GNOME часто не показывает баблы — только главный поток.
+                            Gtk.idle_add(self._idle_show_desktop_notification, notification)
                     
                     self.last_notification_ids = current_ids
                 else:
@@ -321,6 +323,14 @@ class LinearNotifierApp(Gtk.Application):
                     break
                 time.sleep(1)
     
+    def _idle_show_desktop_notification(self, notification):
+        """Вызов _show_desktop_notification из главного потока (через Gtk.idle_add)."""
+        try:
+            self._show_desktop_notification(notification)
+        except Exception as e:
+            print(f"Ошибка при показе desktop уведомления: {e}", file=sys.stderr)
+        return False  # однократный idle callback
+
     def _show_desktop_notification(self, notification):
         """Показать desktop уведомление."""
         title = self._format_notification_title(notification)
