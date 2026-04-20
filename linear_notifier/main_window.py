@@ -6,7 +6,7 @@ from datetime import datetime, timezone
 import gi
 gi.require_version('Gtk', '4.0')
 gi.require_version('Gdk', '4.0')
-from gi.repository import Gtk, Gdk
+from gi.repository import Gtk, Gdk, GLib
 
 from linear_notifier.linear_api import LinearAPI
 
@@ -76,6 +76,10 @@ class MainWindow(Gtk.Window):
         # Подключаем сигнал переключения вкладок для автоматического обновления лога
         notebook.connect("switch-page", self.on_notebook_switch_page)
         
+        self._auto_refresh_source_id = None
+        self.connect("destroy", self._on_destroy)
+        self.connect("notify::visible", self._on_visible_changed)
+        
         # Запускаем автоматическое обновление уведомлений
         self._start_auto_refresh()
     
@@ -98,24 +102,34 @@ class MainWindow(Gtk.Window):
     
     def _start_auto_refresh(self):
         """Запустить автоматическое обновление уведомлений."""
-        from gi.repository import GLib
+        if self._auto_refresh_source_id is not None:
+            GLib.source_remove(self._auto_refresh_source_id)
+            self._auto_refresh_source_id = None
         
         # Обновляем сразу при открытии окна
         self.refresh_notifications()
         
-        # Устанавливаем таймер для периодического обновления (каждую минуту)
-        # Интервал 60 секунд соответствует ограничениям Linear API
-        GLib.timeout_add_seconds(60, self._auto_refresh_callback)
+        # Таймер не останавливаем при скрытии окна: иначе после закрытия окна
+        # обратный отсчёт «N мин. назад» замирает до пересоздания окна.
+        self._auto_refresh_source_id = GLib.timeout_add_seconds(
+            60, self._auto_refresh_callback
+        )
     
     def _auto_refresh_callback(self):
         """Callback для автоматического обновления."""
-        # Проверяем, что окно еще открыто
         if self.is_visible():
             self.refresh_notifications()
-            # Возвращаем True, чтобы таймер продолжал работать
-            return True
-        # Если окно закрыто, останавливаем таймер
-        return False
+        return True
+    
+    def _on_visible_changed(self, obj, pspec):
+        """Сразу обновить подписи времени при показе окна (после скрытия)."""
+        if self.get_visible():
+            self.refresh_notifications()
+    
+    def _on_destroy(self, widget):
+        if self._auto_refresh_source_id is not None:
+            GLib.source_remove(self._auto_refresh_source_id)
+            self._auto_refresh_source_id = None
     
     def refresh_notifications(self):
         """Обновить список уведомлений."""
@@ -302,18 +316,16 @@ class MainWindow(Gtk.Window):
             if dt.tzinfo is None:
                 dt = dt.replace(tzinfo=timezone.utc)
             
-            diff = now - dt
-            
-            if diff.days > 0:
-                return f"{diff.days} дн. назад"
-            elif diff.seconds > 3600:
-                hours = diff.seconds // 3600
-                return f"{hours} ч. назад"
-            elif diff.seconds > 60:
-                minutes = diff.seconds // 60
-                return f"{minutes} мин. назад"
-            else:
+            total = int((now - dt).total_seconds())
+            if total < 0:
+                return "в будущем"
+            if total < 60:
                 return "только что"
+            if total < 3600:
+                return f"{total // 60} мин. назад"
+            if total < 86400:
+                return f"{total // 3600} ч. назад"
+            return f"{total // 86400} дн. назад"
         except Exception:
             return iso_string
     

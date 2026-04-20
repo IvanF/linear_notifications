@@ -13,7 +13,7 @@ gi.require_version('Gtk', '4.0')
 gi.require_version('Notify', '0.7')
 # AyatanaAppIndicator3 импортируется лениво из-за конфликта версий GTK
 
-from gi.repository import Gtk, Gio, Notify
+from gi.repository import Gtk, Gio, GLib, Notify
 
 # pystray импортируется лениво, чтобы избежать конфликта с GTK 4.0
 PYSTRAY_AVAILABLE = None
@@ -223,17 +223,17 @@ class LinearNotifierApp(Gtk.Application):
     def _on_tray_open(self, icon, item):
         """Обработчик клика на иконку в трее (левая кнопка мыши)."""
         # Вызываем GTK функцию из главного потока
-        Gtk.idle_add(self.on_open_action, None, None)
+        GLib.idle_add(self.on_open_action, None, None)
     
     def _on_tray_settings(self, icon, item):
         """Обработчик выбора настроек в меню трея."""
         # Вызываем GTK функцию из главного потока
-        Gtk.idle_add(self.on_settings_action, None, None)
+        GLib.idle_add(self.on_settings_action, None, None)
     
     def _on_tray_quit(self, icon, item):
         """Обработчик выхода из приложения."""
         # Вызываем GTK функцию из главного потока
-        Gtk.idle_add(self._do_quit)
+        GLib.idle_add(self._do_quit)
     
     def _do_quit(self):
         """Выполнить выход из приложения."""
@@ -301,13 +301,13 @@ class LinearNotifierApp(Gtk.Application):
                     # Если есть новые уведомления, обновляем главное окно (если оно открыто)
                     if new_ids and self.main_window:
                         # Обновляем список уведомлений в главном окне через главный поток GTK
-                        Gtk.idle_add(self._refresh_main_window_notifications)
+                        GLib.idle_add(self._refresh_main_window_notifications)
                     
                     for notification in unread:
                         if notification.get('id') in new_ids:
                             # libnotify/GTK не потокобезопасны: show() из polling-потока
                             # в GNOME часто не показывает баблы — только главный поток.
-                            Gtk.idle_add(self._idle_show_desktop_notification, notification)
+                            GLib.idle_add(self._idle_show_desktop_notification, notification)
                     
                     self.last_notification_ids = current_ids
                 else:
@@ -324,7 +324,7 @@ class LinearNotifierApp(Gtk.Application):
                 time.sleep(1)
     
     def _idle_show_desktop_notification(self, notification):
-        """Вызов _show_desktop_notification из главного потока (через Gtk.idle_add)."""
+        """Вызов _show_desktop_notification из главного потока (через GLib.idle_add)."""
         try:
             self._show_desktop_notification(notification)
         except Exception as e:
@@ -364,7 +364,7 @@ class LinearNotifierApp(Gtk.Application):
         """Обработчик клика на desktop уведомление (действие)."""
         print("Клик на уведомление (действие)", file=sys.stderr)
         # Вызываем GTK функцию из главного потока
-        Gtk.idle_add(self._open_main_window)
+        GLib.idle_add(self._open_main_window)
     
     def _on_notification_closed(self, notification, reason):
         """Обработчик закрытия уведомления."""
@@ -394,7 +394,7 @@ class LinearNotifierApp(Gtk.Application):
             # В GNOME клик по уведомлению обычно открывает приложение
             print("Открываем главное окно при закрытии уведомления", file=sys.stderr)
             # Используем idle_add для вызова из главного потока GTK
-            Gtk.idle_add(self._open_main_window)
+            GLib.idle_add(self._open_main_window)
     
     def _refresh_main_window_notifications(self):
         """Обновить список уведомлений в главном окне (вызывается из главного потока GTK)."""
