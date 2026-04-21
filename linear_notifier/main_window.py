@@ -1,96 +1,186 @@
 """Главное окно приложения с отображением уведомлений."""
 
-import os
+import sys
 from datetime import datetime, timezone
 from typing import Optional
 
 import gi
-gi.require_version('Gtk', '4.0')
-gi.require_version('Gdk', '4.0')
-from gi.repository import Gtk, Gdk, GLib
+
+gi.require_version("Gtk", "4.0")
+gi.require_version("Gdk", "4.0")
+from gi.repository import Gtk, Gdk, GLib, GObject
 
 from linear_notifier import __version__
+from linear_notifier.config_store import save_config
+from linear_notifier.i18n import (
+    LANG_CODES,
+    LANG_NAMES_UI,
+    get_language,
+    restart_application,
+    translate_notification_type,
+    tr,
+)
+from linear_notifier.keyring_manager import KeyringManager
 from linear_notifier.linear_api import LinearAPI, is_transient_linear_error
 
 class MainWindow(Gtk.Window):
-    """Главное окно с уведомлениями."""
-    
-    def __init__(self, app, linear_api: LinearAPI, ui_path):
-        """Инициализация главного окна."""
-        super().__init__(application=app, title="Linear Notifier")
+    """Главное окно с уведомлениями и вкладкой настроек."""
+
+    __gsignals__ = {
+        "token-saved": (GObject.SignalFlags.RUN_FIRST, None, (str,)),
+    }
+
+    def __init__(self, app, linear_api: Optional[LinearAPI], ui_path):
+        super().__init__(application=app, title=tr("app_title"))
         self._app = app
         self.linear_api = linear_api
         self.ui_path = ui_path
         self.workspace_url_key = None
-        
-        self.set_default_size(600, 500)
-        
-        # Всегда создаем UI программно с вкладками
-        # UI файл может не существовать или не содержать нужные элементы
+        self._keyring = KeyringManager()
+        self._notebook = None
+        self.settings_page_index = 0
+        self.log_page_index = 0
+
+        self.set_default_size(600, 520)
+
         self._create_ui()
-        
-        # Получаем workspace urlKey асинхронно после создания UI
-        # Это не блокирует открытие окна
+
+        if self.linear_api:
+            self._load_workspace_url_key()
+
+    def set_linear_api(self, api: LinearAPI) -> None:
+        """После сохранения токена подключить API и обновить списки."""
+        self.linear_api = api
+        self.workspace_url_key = None
         self._load_workspace_url_key()
-    
-    def _create_ui(self):
-        """Создать UI программно (fallback)."""
+        self.refresh_notifications()
+        self.refresh_log()
+        self._sync_token_field()
+
+    def focus_settings_tab(self) -> None:
+        if self._notebook is not None:
+            self._notebook.set_current_page(self.settings_page_index)
+
+    def _sync_token_field(self) -> None:
+        if not hasattr(self, "_token_entry") or self._token_entry is None:
+            return
+        t = self._keyring.get_token()
+        if t:
+            self._token_entry.set_text(t)
+
+    def _create_ui(self) -> None:
         root = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=0)
         self.set_child(root)
-        
-        # Создаем Notebook для вкладок
+
         notebook = Gtk.Notebook()
         notebook.set_vexpand(True)
         notebook.set_hexpand(True)
+        self._notebook = notebook
         root.append(notebook)
-        
-        # Вкладка 1: Уведомления
-        notifications_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=10, margin_start=10, margin_end=10, margin_top=10, margin_bottom=10)
-        
-        # ScrolledWindow для списка уведомлений
+
+        # --- Уведомления ---
+        notifications_box = Gtk.Box(
+            orientation=Gtk.Orientation.VERTICAL,
+            spacing=10,
+            margin_start=10,
+            margin_end=10,
+            margin_top=10,
+            margin_bottom=10,
+        )
         scrolled = Gtk.ScrolledWindow()
         scrolled.set_vexpand(True)
         notifications_box.append(scrolled)
-        
-        # ListBox для уведомлений
         self.notifications_list = Gtk.ListBox()
         self.notifications_list.set_selection_mode(Gtk.SelectionMode.NONE)
         scrolled.set_child(self.notifications_list)
-        
-        # Добавляем вкладку уведомлений
-        notifications_label = Gtk.Label(label="Уведомления")
-        notebook.append_page(notifications_box, notifications_label)
-        
-        # Вкладка 2: Лог запросов
-        log_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=10, margin_start=10, margin_end=10, margin_top=10, margin_bottom=10)
-        
-        # ScrolledWindow для списка логов
+        notifications_tab_lbl = Gtk.Label(label=tr("tab_notifications"))
+        notebook.append_page(notifications_box, notifications_tab_lbl)
+
+        # --- Лог ---
+        log_box = Gtk.Box(
+            orientation=Gtk.Orientation.VERTICAL,
+            spacing=10,
+            margin_start=10,
+            margin_end=10,
+            margin_top=10,
+            margin_bottom=10,
+        )
         log_scrolled = Gtk.ScrolledWindow()
         log_scrolled.set_vexpand(True)
         log_box.append(log_scrolled)
-        
-        # ListBox для логов
         self.log_list = Gtk.ListBox()
         self.log_list.set_selection_mode(Gtk.SelectionMode.NONE)
         log_scrolled.set_child(self.log_list)
-        
-        # Добавляем вкладку лога
-        log_label = Gtk.Label(label="Лог запросов")
-        log_page_index = notebook.append_page(log_box, log_label)
-        
-        # Сохраняем индекс вкладки лога для автоматического обновления
-        self.log_page_index = log_page_index
-        
-        # Подключаем сигнал переключения вкладок для автоматического обновления лога
+        log_label = Gtk.Label(label=tr("tab_request_log"))
+        self.log_page_index = notebook.append_page(log_box, log_label)
+
+        # --- Настройки ---
+        settings_box = Gtk.Box(
+            orientation=Gtk.Orientation.VERTICAL,
+            spacing=16,
+            margin_start=16,
+            margin_end=16,
+            margin_top=16,
+            margin_bottom=16,
+        )
+        settings_scroll = Gtk.ScrolledWindow()
+        settings_scroll.set_vexpand(True)
+        settings_scroll.set_child(settings_box)
+        settings_tab_lbl = Gtk.Label(label=tr("tab_settings"))
+        self.settings_page_index = notebook.append_page(settings_scroll, settings_tab_lbl)
+
+        tok_title = Gtk.Label(label=tr("token_label"))
+        tok_title.set_halign(Gtk.Align.START)
+        settings_box.append(tok_title)
+
+        self._token_entry = Gtk.Entry()
+        self._token_entry.set_placeholder_text(tr("token_placeholder"))
+        self._token_entry.set_visibility(False)
+        settings_box.append(self._token_entry)
+
+        self._token_status = Gtk.Label(label="")
+        self._token_status.set_halign(Gtk.Align.START)
+        self._token_status.set_wrap(True)
+        settings_box.append(self._token_status)
+
+        save_tok_btn = Gtk.Button(label=tr("btn_save_token"))
+        save_tok_btn.connect("clicked", self._on_save_token_clicked)
+        settings_box.append(save_tok_btn)
+
+        lang_title = Gtk.Label(label=tr("language_label"))
+        lang_title.set_halign(Gtk.Align.START)
+        lang_title.set_margin_top(12)
+        settings_box.append(lang_title)
+
+        self._lang_combo = Gtk.ComboBoxText()
+        for code in LANG_CODES:
+            self._lang_combo.append(code, LANG_NAMES_UI[code])
+        cur = get_language()
+        if cur in LANG_CODES:
+            self._lang_combo.set_active_id(cur)
+        else:
+            self._lang_combo.set_active(0)
+        settings_box.append(self._lang_combo)
+
+        self._lang_status = Gtk.Label(label="")
+        self._lang_status.set_halign(Gtk.Align.START)
+        self._lang_status.set_wrap(True)
+        settings_box.append(self._lang_status)
+
+        save_lang_btn = Gtk.Button(label=tr("btn_save_language"))
+        save_lang_btn.connect("clicked", self._on_save_language_clicked)
+        settings_box.append(save_lang_btn)
+
+        self._sync_token_field()
+
         notebook.connect("switch-page", self.on_notebook_switch_page)
-        
+
         self._auto_refresh_source_id = None
         self.connect("destroy", self._on_destroy)
         self.connect("notify::visible", self._on_visible_changed)
-        
-        # Запускаем автоматическое обновление уведомлений
+
         self._start_auto_refresh()
-        
+
         footer_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
         footer_box.set_margin_start(12)
         footer_box.set_margin_end(12)
@@ -99,125 +189,138 @@ class MainWindow(Gtk.Window):
         footer_left = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
         self._status_dot = Gtk.Label()
         self._status_dot.set_markup('<span foreground="#9a9a9a">●</span>')
-        self._status_dot.set_tooltip_text("Проверка связи с Linear…")
+        self._status_dot.set_tooltip_text(tr("tooltip_conn_unknown"))
         footer_left.append(self._status_dot)
         footer_box.append(footer_left)
-        version_label = Gtk.Label(label=f"Версия {__version__}")
-        version_label.set_halign(Gtk.Align.END)
-        version_label.set_hexpand(True)
-        version_label.set_opacity(0.65)
-        footer_box.append(version_label)
+        self._version_label = Gtk.Label(label=tr("footer_version", version=__version__))
+        self._version_label.set_halign(Gtk.Align.END)
+        self._version_label.set_hexpand(True)
+        self._version_label.set_opacity(0.65)
+        footer_box.append(self._version_label)
         root.append(footer_box)
+
         connected = getattr(self._app, "_linear_connected", None)
         self.set_linear_reachable(connected)
-    
-    def set_linear_reachable(self, ok: Optional[bool]):
-        """Кружок слева внизу: зелёный — API доступен, красный — нет, серый — ещё не проверяли."""
+
+    def _on_save_token_clicked(self, _btn) -> None:
+        token = self._token_entry.get_text().strip()
+        if not token:
+            self._token_status.set_text(tr("token_err_empty"))
+            return
+        self._token_status.set_text(tr("token_validating"))
+        api = LinearAPI(token)
+        ok, err = api.validate_token()
+        if not ok:
+            self._token_status.set_text(tr("token_err_invalid", msg=err or ""))
+            return
+        if not self._keyring.save_token(token):
+            self._token_status.set_text(tr("token_save_failed"))
+            return
+        self._token_status.set_text(tr("token_saved"))
+        self.emit("token-saved", token)
+
+    def _on_save_language_clicked(self, _btn) -> None:
+        code = self._lang_combo.get_active_id()
+        if not code:
+            return
+        if code == get_language():
+            self._lang_status.set_text("")
+            return
+        save_config({"language": code})
+        self._lang_status.set_text(tr("lang_saved_restart"))
+
+        def _idle_restart():
+            restart_application()
+            return False
+
+        GLib.idle_add(_idle_restart)
+
+    def _load_workspace_url_key(self) -> None:
+        if not self.linear_api:
+            return
+
+        def load_in_background():
+            try:
+                self.workspace_url_key = self.linear_api.get_workspace_url_key()
+            except Exception as e:
+                print(f"Предупреждение: workspace urlKey: {e}", file=sys.stderr)
+
+        import threading
+
+        threading.Thread(target=load_in_background, daemon=True).start()
+
+    def _start_auto_refresh(self) -> None:
+        if self._auto_refresh_source_id is not None:
+            GLib.source_remove(self._auto_refresh_source_id)
+            self._auto_refresh_source_id = None
+        if self.linear_api:
+            self.refresh_notifications()
+        self._auto_refresh_source_id = GLib.timeout_add_seconds(60, self._auto_refresh_callback)
+
+    def _auto_refresh_callback(self) -> bool:
+        if self.is_visible() and self.linear_api:
+            self.refresh_notifications()
+        return True
+
+    def _on_visible_changed(self, _obj, _pspec) -> None:
+        if self.get_visible() and self.linear_api:
+            self.refresh_notifications()
+
+    def _on_destroy(self, _widget) -> None:
+        if self._auto_refresh_source_id is not None:
+            GLib.source_remove(self._auto_refresh_source_id)
+            self._auto_refresh_source_id = None
+
+    def set_linear_reachable(self, ok: Optional[bool]) -> None:
         if not hasattr(self, "_status_dot") or self._status_dot is None:
             return
         if ok is True:
             self._status_dot.set_markup('<span foreground="#2ec27e">●</span>')
-            self._status_dot.set_tooltip_text("Связь с Linear есть")
+            self._status_dot.set_tooltip_text(tr("tooltip_conn_ok"))
         elif ok is False:
             self._status_dot.set_markup('<span foreground="#e01b24">●</span>')
-            self._status_dot.set_tooltip_text("Нет связи с Linear API")
+            self._status_dot.set_tooltip_text(tr("tooltip_conn_bad"))
         else:
             self._status_dot.set_markup('<span foreground="#9a9a9a">●</span>')
-            self._status_dot.set_tooltip_text("Проверка связи с Linear…")
-    
-    def _load_workspace_url_key(self):
-        """Загрузить workspace urlKey асинхронно."""
-        def load_in_background():
-            try:
-                self.workspace_url_key = self.linear_api.get_workspace_url_key()
-                if self.workspace_url_key:
-                    import sys
-                    print(f"Workspace urlKey загружен: {self.workspace_url_key}", file=sys.stderr)
-            except Exception as e:
-                import sys
-                print(f"Предупреждение: Не удалось получить workspace urlKey: {e}", file=sys.stderr)
-        
-        # Запускаем в отдельном потоке, чтобы не блокировать UI
-        import threading
-        thread = threading.Thread(target=load_in_background, daemon=True)
-        thread.start()
-    
-    def _start_auto_refresh(self):
-        """Запустить автоматическое обновление уведомлений."""
-        if self._auto_refresh_source_id is not None:
-            GLib.source_remove(self._auto_refresh_source_id)
-            self._auto_refresh_source_id = None
-        
-        # Обновляем сразу при открытии окна
-        self.refresh_notifications()
-        
-        # Таймер не останавливаем при скрытии окна: иначе после закрытия окна
-        # обратный отсчёт «N мин. назад» замирает до пересоздания окна.
-        self._auto_refresh_source_id = GLib.timeout_add_seconds(
-            60, self._auto_refresh_callback
-        )
-    
-    def _auto_refresh_callback(self):
-        """Callback для автоматического обновления."""
-        if self.is_visible():
-            self.refresh_notifications()
-        return True
-    
-    def _on_visible_changed(self, obj, pspec):
-        """Сразу обновить подписи времени при показе окна (после скрытия)."""
-        if self.get_visible():
-            self.refresh_notifications()
-    
-    def _on_destroy(self, widget):
-        if self._auto_refresh_source_id is not None:
-            GLib.source_remove(self._auto_refresh_source_id)
-            self._auto_refresh_source_id = None
-    
-    def refresh_notifications(self):
-        """Обновить список уведомлений."""
-        import sys
-        
-        # Проверяем, что notifications_list существует
-        if not hasattr(self, 'notifications_list') or self.notifications_list is None:
-            print("Ошибка: notifications_list не инициализирован", file=sys.stderr)
+            self._status_dot.set_tooltip_text(tr("tooltip_conn_unknown"))
+
+    def refresh_notifications(self) -> None:
+        if not hasattr(self, "notifications_list") or self.notifications_list is None:
             return
-        
-        # Проверяем, что linear_api существует
+
         if not self.linear_api:
-            print("Ошибка: linear_api не инициализирован", file=sys.stderr)
-            error_row = Gtk.ListBoxRow()
-            error_label = Gtk.Label(label="Ошибка: API не инициализирован")
-            error_label.set_margin_start(10)
-            error_label.set_margin_end(10)
-            error_label.set_margin_top(10)
-            error_label.set_margin_bottom(10)
-            error_row.set_child(error_label)
-            self.notifications_list.append(error_row)
+            while True:
+                row = self.notifications_list.get_row_at_index(0)
+                if row is None:
+                    break
+                self.notifications_list.remove(row)
+            row = Gtk.ListBoxRow()
+            lab = Gtk.Label(label=tr("no_token_hint"))
+            lab.set_margin_start(10)
+            lab.set_margin_end(10)
+            lab.set_margin_top(10)
+            lab.set_margin_bottom(10)
+            row.set_child(lab)
+            self.notifications_list.append(row)
             return
-        
-        # Обновляем workspace_url_key, если еще не получен (не блокируем, если еще загружается)
+
         if self.workspace_url_key is None:
             try:
-                # Пробуем получить, но не ждем долго
                 self.workspace_url_key = self.linear_api.get_workspace_url_key()
             except Exception as e:
-                print(f"Предупреждение: Не удалось получить workspace urlKey: {e}", file=sys.stderr)
-                # Продолжаем работу без workspace - ссылки будут формироваться без него
-        
-        # Очищаем список
+                print(f"Предупреждение: workspace urlKey: {e}", file=sys.stderr)
+
         while True:
             row = self.notifications_list.get_row_at_index(0)
             if row is None:
                 break
             self.notifications_list.remove(row)
-        
+
         try:
             notifications = self.linear_api.get_notifications(first=25)
-            
             if not notifications:
-                # Показываем сообщение об отсутствии уведомлений
                 empty_row = Gtk.ListBoxRow()
-                empty_label = Gtk.Label(label="Нет уведомлений")
+                empty_label = Gtk.Label(label=tr("empty_notifications"))
                 empty_label.set_margin_start(10)
                 empty_label.set_margin_end(10)
                 empty_label.set_margin_top(10)
@@ -238,12 +341,11 @@ class MainWindow(Gtk.Window):
                 import traceback
                 print(f"Ошибка при загрузке уведомлений: {e}", file=sys.stderr)
                 print(f"Детали: {traceback.format_exc()}", file=sys.stderr)
-            # Показываем ошибку
             error_row = Gtk.ListBoxRow()
             err_text = (
-                "Не удалось загрузить список (сеть или таймаут). Повторим при следующем обновлении."
+                tr("load_error_network")
                 if is_transient_linear_error(e)
-                else f"Ошибка загрузки: {e}"
+                else tr("load_error", err=str(e))
             )
             error_label = Gtk.Label(label=err_text)
             error_label.set_margin_start(10)
@@ -252,32 +354,35 @@ class MainWindow(Gtk.Window):
             error_label.set_margin_bottom(10)
             error_row.set_child(error_label)
             self.notifications_list.append(error_row)
-    
+
     def _create_notification_row(self, notification):
-        """Создать строку для уведомления."""
         row = Gtk.ListBoxRow()
-        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=5, margin_start=10, margin_end=10, margin_top=10, margin_bottom=10)
+        box = Gtk.Box(
+            orientation=Gtk.Orientation.VERTICAL,
+            spacing=5,
+            margin_start=10,
+            margin_end=10,
+            margin_top=10,
+            margin_bottom=10,
+        )
         row.set_child(box)
-        
-        # Заголовок
+
         header_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=10)
         box.append(header_box)
-        
-        ntype = notification.get('type', 'Unknown')
-        type_label = Gtk.Label(label=ntype)
+
+        ntype = notification.get("type", "Unknown")
+        type_label = Gtk.Label(label=translate_notification_type(ntype))
         type_label.set_halign(Gtk.Align.START)
         type_label.add_css_class("notification-type")
         header_box.append(type_label)
-        
-        # Статус прочитанности
-        is_unread = notification.get('archivedAt') is None
+
+        is_unread = notification.get("archivedAt") is None
         status_label = Gtk.Label(label="●" if is_unread else "○")
         status_label.set_halign(Gtk.Align.END)
         status_label.add_css_class("unread" if is_unread else "read")
         header_box.append(status_label)
-        
-        # Время
-        created_at = notification.get('createdAt')
+
+        created_at = notification.get("createdAt")
         if created_at:
             relative_time = self._format_relative_time(created_at)
             absolute_time = self._format_absolute_time(created_at)
@@ -286,18 +391,13 @@ class MainWindow(Gtk.Window):
             time_label.set_halign(Gtk.Align.END)
             time_label.add_css_class("time")
             header_box.append(time_label)
-        
-        # Содержимое в зависимости от типа
-        if ntype == 'IssueNotification' or 'issue' in notification:
-            issue = notification.get('issue', {})
-            identifier = issue.get('identifier', '')
-            title = issue.get('title', '')
-            
-            # Создаем контейнер для заголовка и ссылки
+
+        if ntype == "IssueNotification" or "issue" in notification:
+            issue = notification.get("issue", {})
+            identifier = issue.get("identifier", "")
+            title = issue.get("title", "")
             content_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=5)
             content_box.set_halign(Gtk.Align.START)
-            
-            # Заголовок задачи
             if title:
                 title_label = Gtk.Label(label=title)
                 title_label.set_halign(Gtk.Align.START)
@@ -305,133 +405,101 @@ class MainWindow(Gtk.Window):
                 title_label.set_xalign(0)
                 title_label.add_css_class("issue-title")
                 content_box.append(title_label)
-            
-            # Ссылка на задачу
             if identifier:
                 if self.workspace_url_key:
                     url = f"https://linear.app/{self.workspace_url_key}/issue/{identifier}"
                 else:
-                    # Fallback: используем только identifier, если workspace неизвестен
                     url = f"https://linear.app/issue/{identifier}"
-                
-                # Создаем кнопку-ссылку
                 link_button = Gtk.LinkButton(uri=url, label=identifier)
                 link_button.set_halign(Gtk.Align.START)
                 link_button.add_css_class("issue-link")
                 content_box.append(link_button)
             else:
-                # Если нет identifier, показываем просто текст
-                no_id_label = Gtk.Label(label="Идентификатор не найден")
+                no_id_label = Gtk.Label(label=tr("id_not_found"))
                 no_id_label.set_halign(Gtk.Align.START)
                 content_box.append(no_id_label)
-            
             box.append(content_box)
-        elif ntype == 'ProjectNotification':
-            project = notification.get('project', {})
-            name = project.get('name', 'Project')
-            content_label = Gtk.Label(label=f"Проект: {name}")
+        elif ntype == "ProjectNotification":
+            project = notification.get("project", {})
+            name = project.get("name", tr("project_fallback"))
+            content_label = Gtk.Label(label=tr("project_prefix", name=name))
             content_label.set_halign(Gtk.Align.START)
             content_label.set_wrap(True)
             content_label.set_xalign(0)
             box.append(content_label)
-        elif ntype == 'OauthClientApprovalNotification':
-            # OAuth уведомления обрабатываются без деталей клиента
-            content_label = Gtk.Label(label="OAuth клиент: запрос на одобрение")
+        elif ntype == "OauthClientApprovalNotification":
+            content_label = Gtk.Label(label=tr("oauth_client"))
             content_label.set_halign(Gtk.Align.START)
             content_label.set_wrap(True)
             content_label.set_xalign(0)
             box.append(content_label)
-        elif ntype == 'TeamNotification':
-            # TeamNotification не существует в API, обрабатываем как общий тип
-            content_label = Gtk.Label(label="Уведомление команды")
+        elif ntype == "TeamNotification":
+            content_label = Gtk.Label(label=tr("team_notif"))
             content_label.set_halign(Gtk.Align.START)
             content_label.set_wrap(True)
             content_label.set_xalign(0)
             box.append(content_label)
         else:
-            content_label = Gtk.Label(label="Неизвестный тип уведомления")
+            content_label = Gtk.Label(label=tr("unknown_type"))
             content_label.set_halign(Gtk.Align.START)
             content_label.set_wrap(True)
             content_label.set_xalign(0)
             box.append(content_label)
-        
+
         return row
-    
+
     def _format_relative_time(self, iso_string):
-        """Форматировать время относительно текущего."""
         try:
-            # Парсим ISO строку
-            dt = datetime.fromisoformat(iso_string.replace('Z', '+00:00'))
+            dt = datetime.fromisoformat(iso_string.replace("Z", "+00:00"))
             now = datetime.now(timezone.utc)
-            
             if dt.tzinfo is None:
                 dt = dt.replace(tzinfo=timezone.utc)
-            
             total = int((now - dt).total_seconds())
             if total < 0:
-                return "в будущем"
+                return tr("time_future")
             if total < 60:
-                return "только что"
+                return tr("time_just_now")
             if total < 3600:
-                return f"{total // 60} мин. назад"
+                return tr("time_minutes", n=total // 60)
             if total < 86400:
-                return f"{total // 3600} ч. назад"
-            return f"{total // 86400} дн. назад"
+                return tr("time_hours", n=total // 3600)
+            return tr("time_days", n=total // 86400)
         except Exception:
             return iso_string
-    
+
     def _format_absolute_time(self, iso_string):
-        """Форматировать конкретное время в локальном часовом поясе."""
         try:
-            # Парсим ISO строку (UTC)
-            dt_utc = datetime.fromisoformat(iso_string.replace('Z', '+00:00'))
-            
-            # Убеждаемся, что время в UTC
+            dt_utc = datetime.fromisoformat(iso_string.replace("Z", "+00:00"))
             if dt_utc.tzinfo is None:
                 dt_utc = dt_utc.replace(tzinfo=timezone.utc)
             elif dt_utc.tzinfo != timezone.utc:
-                # Конвертируем в UTC если нужно
                 dt_utc = dt_utc.astimezone(timezone.utc)
-            
-            # Преобразуем в локальный часовой пояс
             dt_local = dt_utc.astimezone()
-            
-            # Форматируем: "14:30" или "14:30 28.11" если не сегодня
             now_local = datetime.now(dt_local.tzinfo)
-            
             if dt_local.date() == now_local.date():
-                # Сегодня - показываем только время
                 return dt_local.strftime("%H:%M")
-            else:
-                # Не сегодня - показываем дату и время
-                return dt_local.strftime("%H:%M %d.%m")
+            return dt_local.strftime("%H:%M %d.%m")
         except Exception as e:
-            import sys
             print(f"Ошибка при форматировании времени: {e}", file=sys.stderr)
-            return iso_string[:16]  # Fallback: первые 16 символов ISO строки
-    
+            return iso_string[:16]
+
     def on_notebook_switch_page(self, notebook, page, page_num):
-        """Обработчик переключения вкладок."""
-        # Автоматически обновляем лог при переключении на вкладку лога
-        if hasattr(self, 'log_page_index') and page_num == self.log_page_index:
+        if hasattr(self, "log_page_index") and page_num == self.log_page_index:
             self.refresh_log()
-    
-    def refresh_log(self):
-        """Обновить список логов."""
-        # Очищаем список
+
+    def refresh_log(self) -> None:
         while True:
             row = self.log_list.get_row_at_index(0)
             if row is None:
                 break
             self.log_list.remove(row)
-        
+        if not self.linear_api:
+            return
         try:
             logs = self.linear_api.get_request_log()
-            
             if not logs:
-                # Показываем сообщение об отсутствии логов
                 empty_row = Gtk.ListBoxRow()
-                empty_label = Gtk.Label(label="Лог пуст")
+                empty_label = Gtk.Label(label=tr("log_empty"))
                 empty_label.set_margin_start(10)
                 empty_label.set_margin_end(10)
                 empty_label.set_margin_top(10)
@@ -443,58 +511,52 @@ class MainWindow(Gtk.Window):
                     row = self._create_log_row(log_entry)
                     self.log_list.append(row)
         except Exception as e:
-            # Показываем ошибку
             error_row = Gtk.ListBoxRow()
-            error_label = Gtk.Label(label=f"Ошибка загрузки лога: {e}")
+            error_label = Gtk.Label(label=tr("log_load_error", err=str(e)))
             error_label.set_margin_start(10)
             error_label.set_margin_end(10)
             error_label.set_margin_top(10)
             error_label.set_margin_bottom(10)
             error_row.set_child(error_label)
             self.log_list.append(error_row)
-    
+
     def _create_log_row(self, log_entry):
-        """Создать строку для лога."""
         row = Gtk.ListBoxRow()
-        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=5, margin_start=10, margin_end=10, margin_top=10, margin_bottom=10)
+        box = Gtk.Box(
+            orientation=Gtk.Orientation.VERTICAL,
+            spacing=5,
+            margin_start=10,
+            margin_end=10,
+            margin_top=10,
+            margin_bottom=10,
+        )
         row.set_child(box)
-        
-        # Заголовок с временем и статусом
         header_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=10)
         box.append(header_box)
-        
-        timestamp = log_entry.get('timestamp', '')
-        status_code = log_entry.get('status_code', 'N/A')
-        error = log_entry.get('error')
-        
-        header_text = f"[{timestamp}] Status: {status_code}"
+        timestamp = log_entry.get("timestamp", "")
+        status_code = log_entry.get("status_code", "N/A")
+        error = log_entry.get("error")
+        header_text = tr("log_status", ts=timestamp, code=status_code)
         if error:
-            header_text += f" | Ошибка: {error}"
-        
+            header_text += tr("log_err_part", err=error)
         header_label = Gtk.Label(label=header_text)
         header_label.set_halign(Gtk.Align.START)
         header_label.add_css_class("log-header")
         header_box.append(header_label)
-        
-        # Запрос
-        request_label = Gtk.Label(label=f"Запрос:\n{log_entry.get('request', 'N/A')}")
+        request_label = Gtk.Label(label=tr("log_request", body=log_entry.get("request", "N/A")))
         request_label.set_halign(Gtk.Align.START)
         request_label.set_wrap(True)
         request_label.set_xalign(0)
         request_label.set_selectable(True)
         request_label.add_css_class("log-request")
         box.append(request_label)
-        
-        # Ответ
-        response = log_entry.get('response', 'N/A')
+        response = log_entry.get("response", "N/A")
         if response:
-            response_label = Gtk.Label(label=f"Ответ:\n{response}")
+            response_label = Gtk.Label(label=tr("log_response", body=response))
             response_label.set_halign(Gtk.Align.START)
             response_label.set_wrap(True)
             response_label.set_xalign(0)
             response_label.set_selectable(True)
             response_label.add_css_class("log-response")
             box.append(response_label)
-        
         return row
-

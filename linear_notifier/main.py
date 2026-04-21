@@ -124,6 +124,9 @@ def main():
     # Убеждаемся, что desktop файл установлен
     ensure_desktop_file()
     
+    from linear_notifier.i18n import load_language_from_config
+    load_language_from_config()
+    
     from linear_notifier.app import LinearNotifierApp
     
     app = LinearNotifierApp()

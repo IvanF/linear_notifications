@@ -1,7 +1,6 @@
 """Основной класс приложения Linear Notifier."""
 
 import os
-import re
 import sys
 import threading
 import time
@@ -21,50 +20,8 @@ PYSTRAY_AVAILABLE = None
 
 from linear_notifier.keyring_manager import KeyringManager
 from linear_notifier.linear_api import LinearAPI, is_transient_linear_error
-from linear_notifier.settings_window import SettingsWindow
+from linear_notifier.i18n import tr, translate_notification_type
 from linear_notifier.main_window import MainWindow
-
-# Подписи к полю notification.type (Linear API / GraphQL)
-_NOTIFICATION_TYPE_LABELS = {
-    "IssueNotification": "Задача",
-    "issueNewComment": "Комментарий",
-    "issueAssignedToYou": "Назначение",
-    "issueUnassignedFromYou": "Снято назначение",
-    "issueMention": "Упоминание",
-    "issueCommentMention": "Упоминание в комментарии",
-    "issueSubscribed": "Подписка",
-    "issueUnsubscribed": "Отписка",
-    "issueStatusChanged": "Статус",
-    "issuePriorityUrgent": "Срочный приоритет",
-    "issueCreated": "Новая задача",
-    "issueEdited": "Изменение",
-    "issueRemoved": "Удаление",
-    "issueBlocking": "Блокировка",
-    "issueUnblocked": "Снята блокировка",
-    "issueReaction": "Реакция",
-    "issueSlaHighRisk": "SLA: риск",
-    "issueSlaBreached": "SLA: нарушен",
-    "ProjectNotification": "Проект",
-    "projectUpdate": "Обновление проекта",
-    "OauthClientApprovalNotification": "OAuth",
-    "TeamNotification": "Команда",
-    "DocumentNotification": "Документ",
-    "InitiativeNotification": "Инициатива",
-    "CustomerNeedNotification": "Customer need",
-    "PullRequestNotification": "Pull request",
-}
-
-
-def _notification_type_label(ntype: str) -> str:
-    """Краткая подпись типа уведомления Linear для UI и пушей."""
-    if not ntype:
-        return "Уведомление"
-    if ntype in _NOTIFICATION_TYPE_LABELS:
-        return _NOTIFICATION_TYPE_LABELS[ntype]
-    # issueNewComment → issue New Comment
-    spaced = re.sub(r"([a-z])([A-Z])", r"\1 \2", ntype)
-    spaced = spaced.replace("_", " ").strip()
-    return spaced or ntype
 
 
 class LinearNotifierApp(Gtk.Application):
@@ -85,7 +42,6 @@ class LinearNotifierApp(Gtk.Application):
         
         self.keyring = KeyringManager()
         self.linear_api = None
-        self.settings_window = None
         self.main_window = None
         self.indicator = None
         self.tray_icon = None
@@ -117,51 +73,48 @@ class LinearNotifierApp(Gtk.Application):
         token = self.keyring.get_token()
         
         if not token:
-            # Первый запуск - показываем окно настроек
-            self.show_settings_window()
-        else:
-            # Токен есть - запускаем основное приложение
-            if not self.linear_api:
-                self.linear_api = LinearAPI(token)
-                self.setup_indicator()
-                self.start_polling()
-            
-            # Если приложение уже запущено и вызывается do_activate (например, при клике на уведомление)
-            # открываем главное окно
-            if self.linear_api:
-                self.on_open_action(None, None)
-    
-    def show_settings_window(self):
-        """Показать окно настроек."""
-        if self.settings_window:
-            self.settings_window.present()
+            if not self.main_window:
+                self.main_window = MainWindow(self, None, self.ui_path)
+                self.main_window.connect("token-saved", self.on_token_saved)
+            self.main_window.present()
+            self.main_window.focus_settings_tab()
             return
         
-        self.settings_window = SettingsWindow(self, self.ui_path)
-        self.settings_window.connect("token-saved", self.on_token_saved)
-        self.settings_window.present()
+        if not self.linear_api:
+            self.linear_api = LinearAPI(token)
+            self.setup_indicator()
+            self.start_polling()
+        
+        if self.linear_api:
+            self.on_open_action(None, None)
+    
+    def show_settings_window(self):
+        """Открыть главное окно на вкладке настроек."""
+        if not self.main_window:
+            self.main_window = MainWindow(self, self.linear_api, self.ui_path)
+            self.main_window.connect("token-saved", self.on_token_saved)
+        self.main_window.present()
+        self.main_window.focus_settings_tab()
     
     def on_token_saved(self, window, token):
         """Обработчик сохранения токена."""
         self.linear_api = LinearAPI(token)
-        if self.settings_window:
-            self.settings_window.close()
-            self.settings_window = None
-        
         self.setup_indicator()
         self.start_polling()
+        if self.main_window:
+            self.main_window.set_linear_api(self.linear_api)
         
-        # Показываем уведомление о том, что приложение работает в фоне
         try:
             notify = Notify.Notification.new(
-                "Linear Notifier",
-                "Приложение запущено и работает в фоне. Откройте его через главное меню для просмотра уведомлений.",
+                tr("startup_notify_title"),
+                tr("startup_notify_body"),
                 self._notify_icon_name(),
             )
             notify.set_urgency(Notify.Urgency.LOW)
+            notify.set_app_name("Linear Notifier")
             notify.show()
         except Exception:
-            pass  # Игнорируем ошибки уведомлений
+            pass
     
     def setup_indicator(self):
         """Настройка системного трея."""
@@ -298,6 +251,7 @@ class LinearNotifierApp(Gtk.Application):
         
         if not self.main_window:
             self.main_window = MainWindow(self, self.linear_api, self.ui_path)
+            self.main_window.connect("token-saved", self.on_token_saved)
         self.main_window.present()
         # Небольшая задержка, чтобы окно успело отобразиться
         import time
@@ -406,8 +360,8 @@ class LinearNotifierApp(Gtk.Application):
         """Пуш: нет связи с Linear."""
         try:
             notify = Notify.Notification.new(
-                "Linear Notifier",
-                "Нет связи с Linear API. Проверьте сеть.",
+                tr("startup_notify_title"),
+                tr("disconnect_notify_body"),
                 "network-offline-symbolic",
             )
             notify.set_urgency(Notify.Urgency.HIGH)
@@ -558,6 +512,7 @@ class LinearNotifierApp(Gtk.Application):
             if not self.main_window:
                 print("Создаем новое главное окно", file=sys.stderr)
                 self.main_window = MainWindow(self, self.linear_api, self.ui_path)
+                self.main_window.connect("token-saved", self.on_token_saved)
             else:
                 print("Используем существующее главное окно", file=sys.stderr)
             
@@ -579,32 +534,32 @@ class LinearNotifierApp(Gtk.Application):
     
     def _format_notification_title(self, notification):
         """Форматирование заголовка уведомления (тип + номер задачи, если есть)."""
-        ntype = notification.get('type') or 'Unknown'
-        type_label = _notification_type_label(ntype)
-        issue = notification.get('issue')
+        ntype = notification.get("type") or "Unknown"
+        type_label = translate_notification_type(ntype)
+        issue = notification.get("issue")
         if isinstance(issue, dict):
-            ident = (issue.get('identifier') or '').strip()
+            ident = (issue.get("identifier") or "").strip()
             if ident:
-                return f"Linear · {type_label} · {ident}"
-        if ntype == 'ProjectNotification':
-            project = notification.get('project', {})
-            name = (project.get('name') or 'Проект').strip()
-            return f"Linear · {type_label} · {name}"
-        return f"Linear · {type_label}"
+                return tr("linear_dot", a=type_label, b=ident)
+        if ntype == "ProjectNotification":
+            project = notification.get("project", {})
+            name = (project.get("name") or tr("project_fallback")).strip()
+            return tr("linear_dot", a=type_label, b=name)
+        return tr("linear_dot_two", a=type_label)
     
     def _format_notification_body(self, notification):
         """Форматирование тела уведомления (название задачи / суть)."""
-        ntype = notification.get('type') or 'Unknown'
-        issue = notification.get('issue')
+        ntype = notification.get("type") or "Unknown"
+        issue = notification.get("issue")
         if isinstance(issue, dict):
-            title = (issue.get('title') or '').strip()
+            title = (issue.get("title") or "").strip()
             if title:
                 return title
-            ident = (issue.get('identifier') or '').strip()
-            return ident or _notification_type_label(ntype)
-        if ntype == 'ProjectNotification':
-            project = notification.get('project', {})
-            name = project.get('name', 'Проект')
-            return f"Обновление проекта: {name}"
-        return _notification_type_label(ntype)
+            ident = (issue.get("identifier") or "").strip()
+            return ident or translate_notification_type(ntype)
+        if ntype == "ProjectNotification":
+            project = notification.get("project", {})
+            name = project.get("name", tr("project_fallback"))
+            return tr("project_update_body", name=name)
+        return translate_notification_type(ntype)
 

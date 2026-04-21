@@ -8,6 +8,7 @@ from gi.repository import Gtk, GObject
 
 from linear_notifier.keyring_manager import KeyringManager
 from linear_notifier.linear_api import LinearAPI
+from linear_notifier.i18n import tr
 
 class SettingsWindow(Gtk.Window):
     """Окно настроек."""
@@ -18,7 +19,7 @@ class SettingsWindow(Gtk.Window):
     
     def __init__(self, app, ui_path):
         """Инициализация окна настроек."""
-        super().__init__(application=app, title="Настройки Linear Notifier")
+        super().__init__(application=app, title=tr("settings_standalone_title"))
         self.ui_path = ui_path
         self.keyring = KeyringManager()
         
@@ -61,12 +62,12 @@ class SettingsWindow(Gtk.Window):
         box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=10, margin_start=20, margin_end=20, margin_top=20, margin_bottom=20)
         self.set_child(box)
         
-        label = Gtk.Label(label="Linear API Token:")
+        label = Gtk.Label(label=tr("token_label"))
         label.set_halign(Gtk.Align.START)
         box.append(label)
         
         self.token_entry = Gtk.Entry()
-        self.token_entry.set_placeholder_text("Введите ваш Linear API токен")
+        self.token_entry.set_placeholder_text(tr("token_placeholder"))
         self.token_entry.set_visibility(False)  # Скрываем пароль
         box.append(self.token_entry)
         
@@ -74,7 +75,7 @@ class SettingsWindow(Gtk.Window):
         self.status_label.set_halign(Gtk.Align.START)
         box.append(self.status_label)
         
-        self.save_button = Gtk.Button(label="Сохранить токен")
+        self.save_button = Gtk.Button(label=tr("btn_save_token"))
         self.save_button.connect("clicked", self.on_save_clicked)
         box.append(self.save_button)
     
@@ -83,25 +84,24 @@ class SettingsWindow(Gtk.Window):
         token = self.token_entry.get_text().strip()
         
         if not token:
-            self._show_status("Ошибка: Токен не может быть пустым", is_error=True)
+            self._show_status(tr("token_err_empty"), is_error=True)
             return
         
         # Проверяем валидность токена
-        self._show_status("Проверка токена...", is_error=False)
+        self._show_status(tr("token_validating"), is_error=False)
         api = LinearAPI(token)
         is_valid, error_msg = api.validate_token()
         if not is_valid:
-            error_text = f"Ошибка: {error_msg}" if error_msg else "Ошибка: Неверный токен"
-            self._show_status(error_text, is_error=True)
+            self._show_status(tr("token_err_invalid", msg=error_msg or ""), is_error=True)
             return
         
         # Сохраняем токен
         if self.keyring.save_token(token):
-            self._show_status("Токен успешно сохранен!", is_error=False)
+            self._show_status(tr("token_saved"), is_error=False)
             # Эмитируем сигнал
             self.emit("token-saved", token)
         else:
-            self._show_status("Ошибка: Не удалось сохранить токен", is_error=True)
+            self._show_status(tr("token_save_failed"), is_error=True)
     
     def _show_status(self, message, is_error=False):
         """Показать статусное сообщение."""
