@@ -2,13 +2,15 @@
 
 import os
 from datetime import datetime, timezone
+from typing import Optional
 
 import gi
 gi.require_version('Gtk', '4.0')
 gi.require_version('Gdk', '4.0')
 from gi.repository import Gtk, Gdk, GLib
 
-from linear_notifier.linear_api import LinearAPI
+from linear_notifier import __version__
+from linear_notifier.linear_api import LinearAPI, is_transient_linear_error
 
 class MainWindow(Gtk.Window):
     """Главное окно с уведомлениями."""
@@ -16,6 +18,7 @@ class MainWindow(Gtk.Window):
     def __init__(self, app, linear_api: LinearAPI, ui_path):
         """Инициализация главного окна."""
         super().__init__(application=app, title="Linear Notifier")
+        self._app = app
         self.linear_api = linear_api
         self.ui_path = ui_path
         self.workspace_url_key = None
@@ -32,9 +35,14 @@ class MainWindow(Gtk.Window):
     
     def _create_ui(self):
         """Создать UI программно (fallback)."""
+        root = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=0)
+        self.set_child(root)
+        
         # Создаем Notebook для вкладок
         notebook = Gtk.Notebook()
-        self.set_child(notebook)
+        notebook.set_vexpand(True)
+        notebook.set_hexpand(True)
+        root.append(notebook)
         
         # Вкладка 1: Уведомления
         notifications_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=10, margin_start=10, margin_end=10, margin_top=10, margin_bottom=10)
@@ -82,6 +90,40 @@ class MainWindow(Gtk.Window):
         
         # Запускаем автоматическое обновление уведомлений
         self._start_auto_refresh()
+        
+        footer_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
+        footer_box.set_margin_start(12)
+        footer_box.set_margin_end(12)
+        footer_box.set_margin_top(4)
+        footer_box.set_margin_bottom(8)
+        footer_left = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+        self._status_dot = Gtk.Label()
+        self._status_dot.set_markup('<span foreground="#9a9a9a">●</span>')
+        self._status_dot.set_tooltip_text("Проверка связи с Linear…")
+        footer_left.append(self._status_dot)
+        footer_box.append(footer_left)
+        version_label = Gtk.Label(label=f"Версия {__version__}")
+        version_label.set_halign(Gtk.Align.END)
+        version_label.set_hexpand(True)
+        version_label.set_opacity(0.65)
+        footer_box.append(version_label)
+        root.append(footer_box)
+        connected = getattr(self._app, "_linear_connected", None)
+        self.set_linear_reachable(connected)
+    
+    def set_linear_reachable(self, ok: Optional[bool]):
+        """Кружок слева внизу: зелёный — API доступен, красный — нет, серый — ещё не проверяли."""
+        if not hasattr(self, "_status_dot") or self._status_dot is None:
+            return
+        if ok is True:
+            self._status_dot.set_markup('<span foreground="#2ec27e">●</span>')
+            self._status_dot.set_tooltip_text("Связь с Linear есть")
+        elif ok is False:
+            self._status_dot.set_markup('<span foreground="#e01b24">●</span>')
+            self._status_dot.set_tooltip_text("Нет связи с Linear API")
+        else:
+            self._status_dot.set_markup('<span foreground="#9a9a9a">●</span>')
+            self._status_dot.set_tooltip_text("Проверка связи с Linear…")
     
     def _load_workspace_url_key(self):
         """Загрузить workspace urlKey асинхронно."""
@@ -170,9 +212,7 @@ class MainWindow(Gtk.Window):
             self.notifications_list.remove(row)
         
         try:
-            print("Загружаем уведомления...", file=sys.stderr)
             notifications = self.linear_api.get_notifications(first=25)
-            print(f"Получено уведомлений: {len(notifications) if notifications else 0}", file=sys.stderr)
             
             if not notifications:
                 # Показываем сообщение об отсутствии уведомлений
@@ -189,12 +229,23 @@ class MainWindow(Gtk.Window):
                     row = self._create_notification_row(notification)
                     self.notifications_list.append(row)
         except Exception as e:
-            import traceback
-            print(f"Ошибка при загрузке уведомлений: {e}", file=sys.stderr)
-            print(f"Детали: {traceback.format_exc()}", file=sys.stderr)
+            if is_transient_linear_error(e):
+                print(
+                    f"Предупреждение: временная ошибка сети при загрузке уведомлений: {e}",
+                    file=sys.stderr,
+                )
+            else:
+                import traceback
+                print(f"Ошибка при загрузке уведомлений: {e}", file=sys.stderr)
+                print(f"Детали: {traceback.format_exc()}", file=sys.stderr)
             # Показываем ошибку
             error_row = Gtk.ListBoxRow()
-            error_label = Gtk.Label(label=f"Ошибка загрузки: {e}")
+            err_text = (
+                "Не удалось загрузить список (сеть или таймаут). Повторим при следующем обновлении."
+                if is_transient_linear_error(e)
+                else f"Ошибка загрузки: {e}"
+            )
+            error_label = Gtk.Label(label=err_text)
             error_label.set_margin_start(10)
             error_label.set_margin_end(10)
             error_label.set_margin_top(10)

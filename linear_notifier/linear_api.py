@@ -3,6 +3,25 @@
 import requests
 from typing import List, Dict, Optional, Tuple
 
+
+def is_transient_linear_error(exc: BaseException) -> bool:
+    """Таймауты и сетевые сбои — не печатать полный traceback в консоль."""
+    if isinstance(exc, (requests.exceptions.Timeout, requests.exceptions.ConnectionError)):
+        return True
+    msg = str(exc).lower()
+    needles = (
+        "превышено время",
+        "timeout",
+        "timed out",
+        "подключения",
+        "connection",
+        "handshake",
+        "ssl",
+        "read timed out",
+    )
+    return any(n in msg for n in needles)
+
+
 class LinearAPI:
     """Клиент для Linear GraphQL API."""
     
@@ -26,7 +45,11 @@ class LinearAPI:
         # Кэш для workspace urlKey
         self._workspace_url_key: Optional[str] = None
     
-    def _query(self, query: str, variables: Optional[Dict] = None) -> Dict:
+    def _log_if(self, request_data: Dict, log_request: bool) -> None:
+        if log_request:
+            self._add_to_log(request_data)
+    
+    def _query(self, query: str, variables: Optional[Dict] = None, log_request: bool = True) -> Dict:
         """Выполнить GraphQL запрос."""
         import json
         from datetime import datetime
@@ -64,22 +87,22 @@ class LinearAPI:
                     error_msg = error_data.get("errors", [{}])[0].get("message", response.text[:200]) if isinstance(error_data.get("errors"), list) else response.text[:200]
                     request_data["error"] = f"400 Bad Request: {error_msg}"
                     request_data["response"] = response.text[:1000]  # Первые 1000 символов
-                    self._add_to_log(request_data)
+                    self._log_if(request_data, log_request)
                     raise Exception(f"400 Bad Request: {error_msg}")
                 except (ValueError, KeyError, IndexError):
                     request_data["error"] = f"400 Bad Request: {response.text[:200]}"
                     request_data["response"] = response.text[:1000]
-                    self._add_to_log(request_data)
+                    self._log_if(request_data, log_request)
                     raise Exception(f"400 Bad Request: {response.text[:200]}")
             elif response.status_code == 401:
                 request_data["error"] = "401 Unauthorized - Неверный токен"
                 request_data["response"] = response.text[:1000]
-                self._add_to_log(request_data)
+                self._log_if(request_data, log_request)
                 raise Exception("401 Unauthorized - Неверный токен")
             elif response.status_code == 403:
                 request_data["error"] = "403 Forbidden - Доступ запрещен"
                 request_data["response"] = response.text[:1000]
-                self._add_to_log(request_data)
+                self._log_if(request_data, log_request)
                 raise Exception("403 Forbidden - Доступ запрещен")
             
             response.raise_for_status()
@@ -87,14 +110,14 @@ class LinearAPI:
             
             # Логируем успешный ответ
             request_data["response"] = json.dumps(data, indent=2, ensure_ascii=False)[:2000]  # Первые 2000 символов
-            self._add_to_log(request_data)
+            self._log_if(request_data, log_request)
         except requests.exceptions.Timeout:
             request_data["error"] = "Превышено время ожидания ответа от Linear API"
-            self._add_to_log(request_data)
+            self._log_if(request_data, log_request)
             raise Exception("Превышено время ожидания ответа от Linear API")
         except requests.exceptions.ConnectionError:
             request_data["error"] = "Ошибка подключения к Linear API. Проверьте интернет-соединение"
-            self._add_to_log(request_data)
+            self._log_if(request_data, log_request)
             raise Exception("Ошибка подключения к Linear API. Проверьте интернет-соединение")
         except requests.exceptions.HTTPError as e:
             if hasattr(e, 'response') and e.response is not None:
@@ -106,39 +129,39 @@ class LinearAPI:
                         error_msg = error_data.get("errors", [{}])[0].get("message", e.response.text[:200]) if isinstance(error_data.get("errors"), list) else e.response.text[:200]
                         request_data["error"] = f"400 Bad Request: {error_msg}"
                         request_data["response"] = e.response.text[:1000]
-                        self._add_to_log(request_data)
+                        self._log_if(request_data, log_request)
                         raise Exception(f"400 Bad Request: {error_msg}")
                     except (ValueError, KeyError, IndexError):
                         request_data["error"] = f"400 Bad Request: {e.response.text[:200]}"
                         request_data["response"] = e.response.text[:1000]
-                        self._add_to_log(request_data)
+                        self._log_if(request_data, log_request)
                         raise Exception(f"400 Bad Request: {e.response.text[:200]}")
                 elif status_code == 401:
                     request_data["error"] = "401 Unauthorized - Неверный токен"
                     request_data["response"] = e.response.text[:1000] if hasattr(e.response, 'text') else ""
-                    self._add_to_log(request_data)
+                    self._log_if(request_data, log_request)
                     raise Exception("401 Unauthorized - Неверный токен")
                 elif status_code == 403:
                     request_data["error"] = "403 Forbidden - Доступ запрещен"
                     request_data["response"] = e.response.text[:1000] if hasattr(e.response, 'text') else ""
-                    self._add_to_log(request_data)
+                    self._log_if(request_data, log_request)
                     raise Exception("403 Forbidden - Доступ запрещен")
             request_data["error"] = f"HTTP ошибка: {e}"
-            self._add_to_log(request_data)
+            self._log_if(request_data, log_request)
             raise Exception(f"HTTP ошибка: {e}")
         except requests.exceptions.RequestException as e:
             request_data["error"] = f"Ошибка запроса: {e}"
-            self._add_to_log(request_data)
+            self._log_if(request_data, log_request)
             raise Exception(f"Ошибка запроса: {e}")
         except ValueError as e:
             request_data["error"] = f"Ошибка парсинга ответа: {e}"
-            self._add_to_log(request_data)
+            self._log_if(request_data, log_request)
             raise Exception(f"Ошибка парсинга ответа: {e}")
         except Exception as e:
             # Логируем любые другие ошибки
             if "error" not in request_data:
                 request_data["error"] = str(e)
-            self._add_to_log(request_data)
+            self._log_if(request_data, log_request)
             raise
         
         # Проверяем GraphQL ошибки
@@ -147,10 +170,10 @@ class LinearAPI:
             if isinstance(errors, list) and len(errors) > 0:
                 error_msg = errors[0].get("message", str(errors[0]))
                 request_data["error"] = f"GraphQL ошибка: {error_msg}"
-                self._add_to_log(request_data)
+                self._log_if(request_data, log_request)
                 raise Exception(f"GraphQL ошибка: {error_msg}")
             request_data["error"] = f"GraphQL ошибка: {errors}"
-            self._add_to_log(request_data)
+            self._log_if(request_data, log_request)
             raise Exception(f"GraphQL ошибка: {errors}")
         
         return data.get("data", {})
@@ -165,6 +188,10 @@ class LinearAPI:
     def get_request_log(self) -> List[Dict]:
         """Получить лог запросов."""
         return self.request_log.copy()
+    
+    def ping(self) -> None:
+        """Лёгкий запрос к API для проверки доступности (сеть, Linear)."""
+        self._query("query { viewer { id } }", log_request=False)
     
     def validate_token(self) -> Tuple[bool, str]:
         """Проверить валидность токена.
@@ -223,7 +250,16 @@ class LinearAPI:
             # Не выводим ошибку, если это просто отсутствие поля - пробуем fallback
             error_str = str(e)
             if "400" not in error_str and "Cannot query" not in error_str:
-                print(f"Ошибка при получении workspace urlKey через organization: {e}", file=sys.stderr)
+                if is_transient_linear_error(e):
+                    print(
+                        f"Предупреждение: не удалось запросить workspace (organization): {e}",
+                        file=sys.stderr,
+                    )
+                else:
+                    print(
+                        f"Ошибка при получении workspace urlKey через organization: {e}",
+                        file=sys.stderr,
+                    )
         
         # Fallback: пробуем получить из первого уведомления через issue.team.organization
         # Только если есть уведомления
@@ -266,7 +302,16 @@ class LinearAPI:
             # Не выводим ошибку, если это просто отсутствие уведомлений
             error_str = str(e)
             if "400" not in error_str and "Cannot query" not in error_str:
-                print(f"Ошибка при получении workspace urlKey через issue.team.organization: {e}", file=sys.stderr)
+                if is_transient_linear_error(e):
+                    print(
+                        f"Предупреждение: не удалось запросить workspace (issue→team): {e}",
+                        file=sys.stderr,
+                    )
+                else:
+                    print(
+                        f"Ошибка при получении workspace urlKey через issue.team.organization: {e}",
+                        file=sys.stderr,
+                    )
         
         return None
     
