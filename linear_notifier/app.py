@@ -4,16 +4,17 @@ import os
 import sys
 import threading
 import time
+from typing import Optional
 
 # pystray несовместим с GTK 4.0, так как все его backends требуют GTK 3.0
 # Системный трей будет отключен, приложение будет работать без иконки в трее
 
 import gi
-gi.require_version('Gtk', '4.0')
-gi.require_version('Notify', '0.7')
+gi.require_version("Gtk", "4.0")
+gi.require_version("Gio", "2.0")
 # AyatanaAppIndicator3 импортируется лениво из-за конфликта версий GTK
 
-from gi.repository import Gtk, Gio, GLib, Gdk, Notify
+from gi.repository import Gtk, Gio, GLib, Gdk
 
 # pystray импортируется лениво, чтобы избежать конфликта с GTK 4.0
 PYSTRAY_AVAILABLE = None
@@ -60,13 +61,6 @@ class LinearNotifierApp(Gtk.Application):
             # Путь относительно пакета
             base_path = os.path.dirname(os.path.abspath(__file__))
         self.ui_path = os.path.join(base_path, 'data', 'ui')
-        
-        # Инициализация уведомлений
-        try:
-            # Используем application_id для правильной работы с desktop файлом
-            Notify.init("com.example.LinearNotifier")
-        except Exception as e:
-            print(f"Предупреждение: Не удалось инициализировать libnotify: {e}", file=sys.stderr)
     
     def do_activate(self):
         """Активация приложения."""
@@ -104,17 +98,12 @@ class LinearNotifierApp(Gtk.Application):
         if self.main_window:
             self.main_window.set_linear_api(self.linear_api)
         
-        try:
-            notify = Notify.Notification.new(
-                tr("startup_notify_title"),
-                tr("startup_notify_body"),
-                self._notify_icon_name(),
-            )
-            notify.set_urgency(Notify.Urgency.LOW)
-            notify.set_app_name("Linear Notifier")
-            notify.show()
-        except Exception:
-            pass
+        self._send_app_notification(
+            "startup",
+            tr("startup_notify_title"),
+            tr("startup_notify_body"),
+            priority=Gio.NotificationPriority.LOW,
+        )
     
     def setup_indicator(self):
         """Настройка системного трея."""
@@ -291,7 +280,7 @@ class LinearNotifierApp(Gtk.Application):
         self.start_connectivity_monitor()
     
     def _notify_icon_name(self) -> str:
-        """Иконка для libnotify: облако (своя или из темы)."""
+        """Иконка для desktop-уведомлений: облако (своя или из темы)."""
         if self._cached_notify_icon_name:
             return self._cached_notify_icon_name
         for candidate in ("com.example.LinearNotifier.notify", "weather-clouds-symbolic"):
@@ -306,6 +295,28 @@ class LinearNotifierApp(Gtk.Application):
                 continue
         self._cached_notify_icon_name = "weather-clouds-symbolic"
         return self._cached_notify_icon_name
+
+    def _send_app_notification(
+        self,
+        notif_id: str,
+        title: str,
+        body: str,
+        *,
+        priority=Gio.NotificationPriority.NORMAL,
+        icon_name: Optional[str] = None,
+    ) -> None:
+        """Показать уведомление через Gio: клик запускает действие app.open (главное окно)."""
+        try:
+            n = Gio.Notification()
+            n.set_title(title)
+            n.set_body(body)
+            n.set_default_action("app.open")
+            name = icon_name if icon_name else self._notify_icon_name()
+            n.set_icon(Gio.ThemedIcon.new(name))
+            n.set_priority(priority)
+            self.send_notification(notif_id, n)
+        except Exception as e:
+            print(f"Предупреждение: не удалось показать уведомление: {e}", file=sys.stderr)
     
     def start_connectivity_monitor(self):
         """Периодическая проверка связи с Linear (каждые 30 с)."""
@@ -327,17 +338,36 @@ class LinearNotifierApp(Gtk.Application):
     def _spawn_connectivity_ping(self):
         if not self.linear_api or not self.polling_active:
             return
+        self._spawn_immediate_ping()
+
+    def _spawn_immediate_ping(self) -> None:
+        """Проверка Linear API в фоне; обновляет индикатор связи."""
+        if not self.linear_api:
+            return
 
         def worker():
-            ok = False
             try:
                 self.linear_api.ping()
-                ok = True
-            except Exception:
-                ok = False
-            GLib.idle_add(self._idle_apply_connectivity, ok)
+                GLib.idle_add(self._idle_apply_connectivity, True)
+            except Exception as e:
+                # Временный сбой сети не переводит индикатор в «нет связи» и не триггерит push
+                if is_transient_linear_error(e):
+                    return
+                GLib.idle_add(self._idle_apply_connectivity, False)
 
         threading.Thread(target=worker, daemon=True).start()
+
+    def force_reconnect(self) -> None:
+        """Немедленный ping и обновление списка уведомлений (без ожидания таймера опроса)."""
+        if not self.linear_api:
+            return
+        self._spawn_immediate_ping()
+        GLib.idle_add(self._idle_refresh_notifications_after_reconnect)
+
+    def _idle_refresh_notifications_after_reconnect(self):
+        if self.main_window:
+            self.main_window.refresh_notifications()
+        return False
     
     def _idle_apply_connectivity(self, ok: bool):
         self._apply_connectivity_result(ok)
@@ -358,17 +388,13 @@ class LinearNotifierApp(Gtk.Application):
     
     def _show_disconnect_notification(self):
         """Пуш: нет связи с Linear."""
-        try:
-            notify = Notify.Notification.new(
-                tr("startup_notify_title"),
-                tr("disconnect_notify_body"),
-                "network-offline-symbolic",
-            )
-            notify.set_urgency(Notify.Urgency.HIGH)
-            notify.set_app_name("Linear Notifier")
-            notify.show()
-        except Exception:
-            pass
+        self._send_app_notification(
+            "linear-disconnect",
+            tr("startup_notify_title"),
+            tr("disconnect_notify_body"),
+            priority=Gio.NotificationPriority.HIGH,
+            icon_name="network-offline-symbolic",
+        )
     
     def _poll_loop(self):
         """Цикл polling уведомлений."""
@@ -392,7 +418,7 @@ class LinearNotifierApp(Gtk.Application):
                     
                     for notification in unread:
                         if notification.get('id') in new_ids:
-                            # libnotify/GTK не потокобезопасны: show() из polling-потока
+                            # Уведомления/GTK не потокобезопасны: show из polling-потока
                             # в GNOME часто не показывает баблы — только главный поток.
                             GLib.idle_add(self._idle_show_desktop_notification, notification)
                     
@@ -406,7 +432,7 @@ class LinearNotifierApp(Gtk.Application):
                     print(f"Предупреждение: временный сбой polling: {e}", file=sys.stderr)
                 else:
                     print(f"Ошибка при polling: {e}", file=sys.stderr)
-                GLib.idle_add(self._idle_apply_connectivity, False)
+                    GLib.idle_add(self._idle_apply_connectivity, False)
             
             # Ждем 60 секунд (1 минута) до следующего polling
             for _ in range(60):
@@ -423,69 +449,17 @@ class LinearNotifierApp(Gtk.Application):
         return False  # однократный idle callback
 
     def _show_desktop_notification(self, notification):
-        """Показать desktop уведомление."""
+        """Показать desktop-уведомление; клик по баблу открывает главное окно (Gio + app.open)."""
         title = self._format_notification_title(notification)
         body = self._format_notification_body(notification)
-        
-        notify = Notify.Notification.new(title, body, self._notify_icon_name())
-        notify.set_urgency(Notify.Urgency.NORMAL)
-        
-        # Устанавливаем app_name для правильной работы с desktop файлом
-        # В GNOME клик по уведомлению открывает приложение через desktop файл
-        try:
-            notify.set_app_name("Linear Notifier")
-        except:
-            pass
-        
-        # Добавляем действие для открытия главного окна при клике
-        # В libnotify действия обрабатываются через callback в add_action
-        # "default" - это специальное действие, которое вызывается при клике на само уведомление
-        notify.add_action("default", "Открыть", self._on_notification_clicked, None)
-        
-        # Подключаем сигнал "closed" для обработки клика по самому уведомлению
-        # В GNOME клик по уведомлению обычно закрывает его, и мы обрабатываем это
-        notify.connect("closed", self._on_notification_closed)
-        
-        # Сохраняем ссылку на уведомление для отслеживания
-        notify._linear_notification = notification
-        
-        notify.show()
-    
-    def _on_notification_clicked(self, notification, action_name, user_data):
-        """Обработчик клика на desktop уведомление (действие)."""
-        print("Клик на уведомление (действие)", file=sys.stderr)
-        # Вызываем GTK функцию из главного потока
-        GLib.idle_add(self._open_main_window)
-    
-    def _on_notification_closed(self, notification, reason):
-        """Обработчик закрытия уведомления."""
-        # Получаем числовое значение причины закрытия
-        try:
-            reason_value = int(reason)
-        except (ValueError, TypeError):
-            try:
-                reason_value = int(str(reason))
-            except:
-                reason_value = None
-        
-        print(f"Уведомление закрыто, причина: {reason} (значение: {reason_value})", file=sys.stderr)
-        
-        # В libnotify:
-        # 1 = EXPIRED (истекло)
-        # 2 = DISMISSED (закрыто пользователем вручную или клик)
-        # 3 = ACTION (клик на действие)
-        
-        # В GNOME клик по уведомлению обычно закрывает его с причиной DISMISSED (2)
-        # Открываем главное окно при любом закрытии, кроме истечения времени
-        if reason == Notify.NotificationClosedReason.EXPIRED or reason_value == 1:
-            # Уведомление истекло - не открываем окно
-            print("Уведомление истекло, не открываем окно", file=sys.stderr)
-        else:
-            # Уведомление было закрыто пользователем (клик по уведомлению или закрытие)
-            # В GNOME клик по уведомлению обычно открывает приложение
-            print("Открываем главное окно при закрытии уведомления", file=sys.stderr)
-            # Используем idle_add для вызова из главного потока GTK
-            GLib.idle_add(self._open_main_window)
+        nid = notification.get("id")
+        notif_id = f"linear-{nid}" if nid is not None else f"linear-{id(notification)}"
+        self._send_app_notification(
+            notif_id,
+            title,
+            body,
+            priority=Gio.NotificationPriority.NORMAL,
+        )
     
     def _refresh_main_window_notifications(self):
         """Обновить список уведомлений в главном окне (вызывается из главного потока GTK)."""

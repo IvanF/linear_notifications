@@ -20,7 +20,7 @@ def check_dependencies():
             for dep in missing:
                 print(f"  - {dep}", file=sys.stderr)
             print("\nУстановите зависимости командой:", file=sys.stderr)
-            print("  sudo apt install python3-gi python3-gi-cairo gir1.2-gtk-4.0 gir1.2-ayatanaappindicator3-0.1 libnotify4", file=sys.stderr)
+            print("  sudo apt install python3-gi python3-gi-cairo gir1.2-gtk-4.0 libnotify4", file=sys.stderr)
             sys.exit(1)
     
     # Проверяем GTK 4 сначала (основная зависимость)
@@ -34,13 +34,6 @@ def check_dependencies():
     except ValueError as e:
         missing.append(f"GTK 4: {e}")
     
-    # Проверяем Notify
-    try:
-        gi.require_version('Notify', '0.7')
-        from gi.repository import Notify
-    except (ImportError, ValueError) as e:
-        missing.append(f"libnotify (Notify): {e}")
-    
     # AyatanaAppIndicator3 проверяется в app.py при использовании,
     # так как он требует GTK 3.0, а мы используем GTK 4.0
     # Это может вызвать конфликт, но проверка будет выполнена позже
@@ -50,7 +43,7 @@ def check_dependencies():
         for dep in missing:
             print(f"  - {dep}", file=sys.stderr)
         print("\nУстановите зависимости командой:", file=sys.stderr)
-        print("  sudo apt install python3-gi python3-gi-cairo gir1.2-gtk-4.0 gir1.2-ayatanaappindicator3-0.1 libnotify4", file=sys.stderr)
+        print("  sudo apt install python3-gi python3-gi-cairo gir1.2-gtk-4.0 libnotify4", file=sys.stderr)
         sys.exit(1)
 
 def ensure_desktop_file(force=False):

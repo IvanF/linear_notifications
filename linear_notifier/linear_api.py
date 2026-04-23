@@ -8,6 +8,10 @@ def is_transient_linear_error(exc: BaseException) -> bool:
     """Таймауты и сетевые сбои — не печатать полный traceback в консоль."""
     if isinstance(exc, (requests.exceptions.Timeout, requests.exceptions.ConnectionError)):
         return True
+    # Chunked/stream drops — часто кратковременные
+    chunked = getattr(requests.exceptions, "ChunkedEncodingError", None)
+    if chunked is not None and isinstance(exc, chunked):
+        return True
     msg = str(exc).lower()
     needles = (
         "превышено время",
@@ -18,6 +22,15 @@ def is_transient_linear_error(exc: BaseException) -> bool:
         "handshake",
         "ssl",
         "read timed out",
+        "429",
+        "502",
+        "503",
+        "504",
+        "rate limit",
+        "too many requests",
+        "service unavailable",
+        "bad gateway",
+        "gateway timeout",
     )
     return any(n in msg for n in needles)
 

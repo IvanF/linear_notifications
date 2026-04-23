@@ -23,6 +23,10 @@ from linear_notifier.i18n import (
 from linear_notifier.keyring_manager import KeyringManager
 from linear_notifier.linear_api import LinearAPI, is_transient_linear_error
 
+# Ширина полей на вкладке «Настройки» (не растягиваются при ресайзе окна)
+_SETTINGS_FORM_WIDTH = 480
+
+
 class MainWindow(Gtk.Window):
     """Главное окно с уведомлениями и вкладкой настроек."""
 
@@ -123,9 +127,18 @@ class MainWindow(Gtk.Window):
             margin_top=16,
             margin_bottom=16,
         )
+        settings_box.set_hexpand(False)
+        settings_box.set_size_request(_SETTINGS_FORM_WIDTH, -1)
+        # Иначе ScrolledWindow растянет колонку на всю ширину вкладки
+        settings_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=0)
+        settings_row.set_hexpand(True)
+        settings_row.append(settings_box)
+        settings_row_spacer = Gtk.Box()
+        settings_row_spacer.set_hexpand(True)
+        settings_row.append(settings_row_spacer)
         settings_scroll = Gtk.ScrolledWindow()
         settings_scroll.set_vexpand(True)
-        settings_scroll.set_child(settings_box)
+        settings_scroll.set_child(settings_row)
         settings_tab_lbl = Gtk.Label(label=tr("tab_settings"))
         self.settings_page_index = notebook.append_page(settings_scroll, settings_tab_lbl)
 
@@ -136,14 +149,20 @@ class MainWindow(Gtk.Window):
         self._token_entry = Gtk.Entry()
         self._token_entry.set_placeholder_text(tr("token_placeholder"))
         self._token_entry.set_visibility(False)
+        self._token_entry.set_hexpand(False)
+        self._token_entry.set_size_request(_SETTINGS_FORM_WIDTH, -1)
         settings_box.append(self._token_entry)
 
         self._token_status = Gtk.Label(label="")
         self._token_status.set_halign(Gtk.Align.START)
         self._token_status.set_wrap(True)
+        self._token_status.set_hexpand(False)
+        self._token_status.set_size_request(_SETTINGS_FORM_WIDTH, -1)
         settings_box.append(self._token_status)
 
         save_tok_btn = Gtk.Button(label=tr("btn_save_token"))
+        save_tok_btn.set_hexpand(False)
+        save_tok_btn.set_halign(Gtk.Align.START)
         save_tok_btn.connect("clicked", self._on_save_token_clicked)
         settings_box.append(save_tok_btn)
 
@@ -160,14 +179,20 @@ class MainWindow(Gtk.Window):
             self._lang_combo.set_active_id(cur)
         else:
             self._lang_combo.set_active(0)
+        self._lang_combo.set_hexpand(False)
+        self._lang_combo.set_size_request(_SETTINGS_FORM_WIDTH, -1)
         settings_box.append(self._lang_combo)
 
         self._lang_status = Gtk.Label(label="")
         self._lang_status.set_halign(Gtk.Align.START)
         self._lang_status.set_wrap(True)
+        self._lang_status.set_hexpand(False)
+        self._lang_status.set_size_request(_SETTINGS_FORM_WIDTH, -1)
         settings_box.append(self._lang_status)
 
         save_lang_btn = Gtk.Button(label=tr("btn_save_language"))
+        save_lang_btn.set_hexpand(False)
+        save_lang_btn.set_halign(Gtk.Align.START)
         save_lang_btn.connect("clicked", self._on_save_language_clicked)
         settings_box.append(save_lang_btn)
 
@@ -190,6 +215,9 @@ class MainWindow(Gtk.Window):
         self._status_dot = Gtk.Label()
         self._status_dot.set_markup('<span foreground="#9a9a9a">●</span>')
         self._status_dot.set_tooltip_text(tr("tooltip_conn_unknown"))
+        self._status_dot_click = Gtk.GestureClick.new()
+        self._status_dot_click.connect("released", self._on_status_dot_released)
+        self._status_dot.add_controller(self._status_dot_click)
         footer_left.append(self._status_dot)
         footer_box.append(footer_left)
         self._version_label = Gtk.Label(label=tr("footer_version", version=__version__))
@@ -277,12 +305,32 @@ class MainWindow(Gtk.Window):
         if ok is True:
             self._status_dot.set_markup('<span foreground="#2ec27e">●</span>')
             self._status_dot.set_tooltip_text(tr("tooltip_conn_ok"))
+            self._status_dot.set_cursor(None)
         elif ok is False:
             self._status_dot.set_markup('<span foreground="#e01b24">●</span>')
             self._status_dot.set_tooltip_text(tr("tooltip_conn_bad"))
+            try:
+                ptr = Gdk.Cursor.new_from_name("pointer", None)
+                if ptr:
+                    self._status_dot.set_cursor(ptr)
+            except Exception:
+                pass
         else:
             self._status_dot.set_markup('<span foreground="#9a9a9a">●</span>')
             self._status_dot.set_tooltip_text(tr("tooltip_conn_unknown"))
+            self._status_dot.set_cursor(None)
+
+    def _on_status_dot_released(self, _gesture, n_press: int, _x: float, _y: float) -> None:
+        if n_press != 1:
+            return
+        if getattr(self._app, "_linear_connected", None) is False and hasattr(
+            self._app, "force_reconnect"
+        ):
+            self._app.force_reconnect()
+
+    def _on_reconnect_clicked(self, _btn) -> None:
+        if hasattr(self._app, "force_reconnect"):
+            self._app.force_reconnect()
 
     def refresh_notifications(self) -> None:
         if not hasattr(self, "notifications_list") or self.notifications_list is None:
@@ -347,12 +395,20 @@ class MainWindow(Gtk.Window):
                 if is_transient_linear_error(e)
                 else tr("load_error", err=str(e))
             )
+            err_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
+            err_box.set_margin_start(10)
+            err_box.set_margin_end(10)
+            err_box.set_margin_top(10)
+            err_box.set_margin_bottom(10)
             error_label = Gtk.Label(label=err_text)
-            error_label.set_margin_start(10)
-            error_label.set_margin_end(10)
-            error_label.set_margin_top(10)
-            error_label.set_margin_bottom(10)
-            error_row.set_child(error_label)
+            error_label.set_wrap(True)
+            error_label.set_xalign(0)
+            err_box.append(error_label)
+            reconnect_btn = Gtk.Button(label=tr("btn_reconnect"))
+            reconnect_btn.set_halign(Gtk.Align.START)
+            reconnect_btn.connect("clicked", self._on_reconnect_clicked)
+            err_box.append(reconnect_btn)
+            error_row.set_child(err_box)
             self.notifications_list.append(error_row)
 
     def _create_notification_row(self, notification):
