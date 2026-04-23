@@ -242,12 +242,8 @@ class LinearNotifierApp(Gtk.Application):
             self.main_window = MainWindow(self, self.linear_api, self.ui_path)
             self.main_window.connect("token-saved", self.on_token_saved)
         self.main_window.present()
-        # Небольшая задержка, чтобы окно успело отобразиться
-        import time
-        time.sleep(0.1)
         self.main_window.refresh_notifications()
-        # Также обновляем лог при открытии окна
-        if hasattr(self.main_window, 'refresh_log'):
+        if hasattr(self.main_window, "refresh_log"):
             self.main_window.refresh_log()
     
     def on_settings_action(self, action, param):
@@ -492,9 +488,6 @@ class LinearNotifierApp(Gtk.Application):
             
             self.main_window.present()
             print("Обновляем список уведомлений (25 последних)", file=sys.stderr)
-            # Небольшая задержка, чтобы окно успело отобразиться
-            import time
-            time.sleep(0.1)
             self.main_window.refresh_notifications()
             # Лог будет обновляться автоматически при переключении на вкладку
         except Exception as e:

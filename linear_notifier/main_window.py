@@ -1,8 +1,9 @@
 """Главное окно приложения с отображением уведомлений."""
 
 import sys
+import threading
 from datetime import datetime, timezone
-from typing import Optional
+from typing import List, Optional
 
 import gi
 
@@ -46,6 +47,7 @@ class MainWindow(Gtk.Window):
         self.log_page_index = 0
 
         self.set_default_size(600, 520)
+        self._notif_refresh_seq = 0
 
         self._create_ui()
 
@@ -352,34 +354,55 @@ class MainWindow(Gtk.Window):
             self.notifications_list.append(row)
             return
 
-        if self.workspace_url_key is None:
-            try:
-                self.workspace_url_key = self.linear_api.get_workspace_url_key()
-            except Exception as e:
-                print(f"Предупреждение: workspace urlKey: {e}", file=sys.stderr)
+        self._notif_refresh_seq += 1
+        seq = self._notif_refresh_seq
 
+        def worker() -> None:
+            wk: Optional[str] = self.workspace_url_key
+            if wk is None and self.linear_api is not None:
+                try:
+                    wk = self.linear_api.get_workspace_url_key()
+                except Exception as e:
+                    print(f"Предупреждение: workspace urlKey: {e}", file=sys.stderr)
+            err = None
+            notifications: Optional[List[dict]] = None
+            try:
+                if self.linear_api is not None:
+                    notifications = self.linear_api.get_notifications(first=25)
+            except Exception as e:
+                err = e
+
+            def on_main() -> bool:
+                self._apply_notifications_fetch_result(
+                    seq, wk, notifications, err
+                )
+                return False
+
+            GLib.idle_add(on_main)
+
+        threading.Thread(target=worker, daemon=True, name="linear-notif-fetch").start()
+
+    def _apply_notifications_fetch_result(
+        self,
+        seq: int,
+        wk: Optional[str],
+        notifications: Optional[List[dict]],
+        err: Optional[Exception],
+    ) -> None:
+        if seq != self._notif_refresh_seq:
+            return
+        if not hasattr(self, "notifications_list") or self.notifications_list is None:
+            return
+        if not self.linear_api:
+            return
+        self.workspace_url_key = wk
         while True:
             row = self.notifications_list.get_row_at_index(0)
             if row is None:
                 break
             self.notifications_list.remove(row)
-
-        try:
-            notifications = self.linear_api.get_notifications(first=25)
-            if not notifications:
-                empty_row = Gtk.ListBoxRow()
-                empty_label = Gtk.Label(label=tr("empty_notifications"))
-                empty_label.set_margin_start(10)
-                empty_label.set_margin_end(10)
-                empty_label.set_margin_top(10)
-                empty_label.set_margin_bottom(10)
-                empty_row.set_child(empty_label)
-                self.notifications_list.append(empty_row)
-            else:
-                for notification in notifications:
-                    row = self._create_notification_row(notification)
-                    self.notifications_list.append(row)
-        except Exception as e:
+        if err is not None:
+            e = err
             if is_transient_linear_error(e):
                 print(
                     f"Предупреждение: временная ошибка сети при загрузке уведомлений: {e}",
@@ -410,6 +433,20 @@ class MainWindow(Gtk.Window):
             err_box.append(reconnect_btn)
             error_row.set_child(err_box)
             self.notifications_list.append(error_row)
+            return
+        if not notifications:
+            empty_row = Gtk.ListBoxRow()
+            empty_label = Gtk.Label(label=tr("empty_notifications"))
+            empty_label.set_margin_start(10)
+            empty_label.set_margin_end(10)
+            empty_label.set_margin_top(10)
+            empty_label.set_margin_bottom(10)
+            empty_row.set_child(empty_label)
+            self.notifications_list.append(empty_row)
+        else:
+            for notification in notifications:
+                row = self._create_notification_row(notification)
+                self.notifications_list.append(row)
 
     def _create_notification_row(self, notification):
         row = Gtk.ListBoxRow()
