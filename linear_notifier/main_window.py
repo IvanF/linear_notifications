@@ -493,6 +493,15 @@ class MainWindow(Gtk.Window):
             content_box.set_halign(Gtk.Align.START)
             if title:
                 title_label = Gtk.Label(label=title)
+            # Добавляем статус, если он присутствует
+            state = issue.get("state", {})
+            state_name = state.get("name", "")
+            if state_name:
+                status_label = Gtk.Label(label=f"Статус: {state_name}")
+                status_label.set_halign(Gtk.Align.START)
+                status_label.set_wrap(True)
+                status_label.set_xalign(0)
+                content_box.append(status_label)
                 title_label.set_halign(Gtk.Align.START)
                 title_label.set_wrap(True)
                 title_label.set_xalign(0)

@@ -342,12 +342,14 @@ class LinearAPI:
                     type
                     createdAt
                     archivedAt
-                    ... on IssueNotification {
-                        issue {
-                            identifier
-                            title
-                        }
+... on IssueNotification {
+                    issue {
+                        identifier
+                        title
+                        state { name }
                     }
+                }
+
                 }
             }
         }
